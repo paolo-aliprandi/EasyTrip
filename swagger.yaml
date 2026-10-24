@@ -2,13 +2,16 @@ openapi: 3.0.0
 info:
   title: EasyTrip
   version: 1.0.0
-  description: EasyTrip official API
+  description: >-
+    EasyTrip trip-planning API. The public guest deployment exposes the facade
+    and health endpoint only; authentication and saved history belong to the
+    separate legacy full-server mode. Guest traffic is rate-limited.
   license:
     name: Licensed Under MIT
     url: https://spdx.org/licenses/MIT.html
   contact:
-    name: JSONPlaceholder
-    url: https://jsonplaceholder.typicode.com
+    name: EasyTrip
+    url: https://github.com/paolo-aliprandi/EasyTrip
 servers:
   - url: http://localhost:12349
     description: EasyTrip Facade server
@@ -22,6 +25,24 @@ servers:
     description: Auth Tools server
   
 paths:
+  '/healthz':
+    get:
+      summary: Check that the public application is responding
+      description: Does not contact external providers or establish provider availability.
+      tags:
+        - EasyTrip Facade
+      responses:
+        '200':
+          description: Application is responding
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+
   '/v1/users/login':
     post:
       summary: Authentication of an user and get a new token
@@ -195,7 +216,12 @@ paths:
   '/v1/locations/poi':
     get:
       summary: Get points of interests within an area
-      description: Get points of interests within an area
+      description: >-
+        Uses representative category search terms in geographically bounded,
+        category-filtered GraphHopper geocoding searches. Requires
+        GRAPHHOPPER_KEY and consumes account credits. Returns up to ten distinct,
+        validated OSM points of interest with an actual city. Search coverage is
+        not exhaustive; empty results do not imply the area has no attractions.
       tags:
         - OSM Tools
       parameters:
@@ -228,16 +254,20 @@ paths:
               schema:
                 type: object
                 properties:
-                  version:
-                    $ref: '#/components/schemas/overpassVersion'
-                  generator:
-                    $ref: '#/components/schemas/overpassGenerator'
-                  osm3s:
-                    $ref: '#/components/schemas/overpassOsm3s'
+                  source:
+                    type: string
+                    example: GraphHopper geocoding
+                  attribution:
+                    type: string
+                    example: "OpenStreetMap contributors, https://www.openstreetmap.org/copyright"
                   elements:
                     $ref: '#/components/schemas/poiArray'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '502':
+          description: POI provider rejected the request, timed out, or returned invalid data
+        '503':
+          description: GraphHopper key is not configured
 
   '/v1/locations/nearbyCities':
     get:
@@ -466,6 +496,12 @@ paths:
         - $ref: '#/components/parameters/minDistance'
         - $ref: '#/components/parameters/maxDetour'
         - $ref: '#/components/parameters/profile'
+        - name: poisDescriptions
+          in: query
+          description: Include the actual discovered POIs for each intermediate town instead of only their count
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           $ref: '#/components/responses/pathRoute'
@@ -515,10 +551,104 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
 
+  '/v1/status':
+    get:
+      summary: Check configured trip-planning capabilities without exposing credentials
+      tags:
+        - EasyTrip Facade
+      responses:
+        '200':
+          description: Configuration flags, not a live provider health check
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  routing:
+                    type: boolean
+                  weather:
+                    type: boolean
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  '/v1/trip/places':
+    get:
+      summary: Find up to five places for an explicitly chosen custom stop
+      tags:
+        - EasyTrip Facade
+      parameters:
+        - $ref: '#/components/parameters/address'
+      responses:
+        '200':
+          description: Matching geocoded places
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hits:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/geocode'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: No matching places
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          description: Place provider unavailable
+        '503':
+          description: Routing provider is not configured
+
+  '/v1/trip/route':
+    post:
+      summary: Recalculate a guest itinerary from explicitly selected places
+      description: No account is required. Includes at most eight intermediate stops.
+      tags:
+        - EasyTrip Facade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stops]
+              properties:
+                profile:
+                  type: string
+                  enum: [car, bike, foot]
+                  default: car
+                stops:
+                  $ref: '#/components/schemas/routeStops'
+      responses:
+        '200':
+          description: Recalculated guest itinerary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/guestTravel'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          description: Request body exceeds the 32 KB limit
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          description: Route provider unavailable or no usable route
+        '503':
+          description: Routing provider is not configured
+
   '/v1/trip/travel':
     get:
       summary: Get information of the travel of the trip
-      description: Get information of the travel of the trip
+      description: >-
+        Guest planning with preserved travel mode. Discovered points of interest
+        are included in each intermediate stop's poi array without repeating the
+        discovery search for optional enrichment. Optional information failures
+        are returned as warnings without discarding the route. Stop search
+        distance is the half-width of a geographic search square, not a
+        detour-time guarantee. Stops are sampled by cumulative route distance.
       tags:
         - EasyTrip Facade
       parameters:
@@ -537,27 +667,51 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  start:
-                    type: object
-                    description: Beginning of the trip
-                    properties:
-                      address:
-                        $ref: '#/components/schemas/start'
-                  end:
-                    allOf:
-                      - $ref: '#/components/schemas/endInfo'
-                      - description: Destination of the trip
-                  intermediates:
-                    type: array
-                    description: Intermediary stops
-                    items:
-                      $ref: '#/components/schemas/intermediateInfo'
-                  paths:
-                    $ref: '#/components/schemas/paths'
+                $ref: '#/components/schemas/guestTravel'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          description: Route provider unavailable or no usable route
+        '503':
+          description: Routing provider is not configured
+
+  '/v1/trip/poi/{type}/{id}':
+    get:
+      summary: Load factual metadata and a verified photo for an OpenStreetMap POI
+      description: >-
+        Reads the exact OSM element, follows its Wikidata identity, and retrieves
+        a linked Wikimedia Commons image with author, license, and source URL.
+        Metadata is cached for an hour, or one minute after partial failures.
+        Image is null when no verified image exists. Optional metadata failures
+        are explicit warnings. This endpoint does not consume GraphHopper credits.
+      tags:
+        - EasyTrip Facade
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [node, way, relation]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[1-9]\d{0,15}$'
+      responses:
+        '200':
+          description: POI name, description, address, category, hours, website, accessibility, fee, image attribution, sources, and warnings
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: OSM element no longer exists
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          description: OSM metadata is unavailable or invalid
 
   '/v1/history':
     post:
@@ -731,12 +885,32 @@ components:
     maxDetour:
       name: maxDetour
       in: query
-      description: Max distance of a detour for a stop. It has to be less or equal then minDistance/2, otherwise its default value wil be that value
+      description: Geographic search-square half-width in meters, at most minDistance/2. Defaults to minDistance/2 when omitted. This is not a guarantee of detour distance or time.
       schema:
         $ref: '#/components/schemas/maxDetour'
       example: 10000
 
   schemas:
+    guestTravel:
+      type: object
+      properties:
+        start:
+          type: object
+          properties:
+            address:
+              $ref: '#/components/schemas/start'
+        end:
+          $ref: '#/components/schemas/endInfo'
+        intermediates:
+          type: array
+          items:
+            $ref: '#/components/schemas/intermediateInfo'
+        paths:
+          $ref: '#/components/schemas/paths'
+        warnings:
+          type: array
+          items:
+            type: string
     limit:
       type: integer
       minimum: 0
@@ -772,13 +946,13 @@ components:
       example: "car"
     minDistance:
       type: number
-      description: Minimum distance between two stops. If limit is not specified this does not count
+      description: Minimum straight-line stop spacing in meters. Guest facade requests accept at most 1000000 meters.
       minimum: 0
       default: 20000
       example: 20000
     maxDetour:
       type: number
-      description: Max distance of a detour for a stop. It has to be less or equal then minDistance/2, otherwise its default value wil be that value. if minDistance is not specified this does not count
+      description: Geographic search-square half-width in meters, at most minDistance/2; defaults to minDistance/2 when omitted. Not a guaranteed detour distance or time.
       minimum: 0
       example: 10000
     user:
@@ -1291,6 +1465,14 @@ components:
         - $ref: '#/components/schemas/destinationInfoNoAddr'
 
   responses:
+    RateLimited:
+      description: Per-IP traffic, application routing budget, or provider quota exceeded
+      headers:
+        Retry-After:
+          description: Minimum suggested wait in seconds; daily quotas may take longer to recover
+          schema:
+            type: integer
+            minimum: 1
     NoToken:
       description: No token provided
     InvalidToken:
@@ -1310,3 +1492,5 @@ components:
             properties:
               route:
                 $ref: '#/components/schemas/paths'
+              stops:
+                $ref: '#/components/schemas/routeStops'

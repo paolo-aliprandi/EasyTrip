@@ -1,6 +1,5 @@
 'use strict';
 
-const uuid = require('uuid');
 const url = require('url');
 const mongoose = require('mongoose');
 const model = require('../models/users');

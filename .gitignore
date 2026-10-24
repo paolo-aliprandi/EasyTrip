@@ -160,6 +160,10 @@ dist
 .history
 .ionide
 
+# Browser test artifacts
+test-results/
+playwright-report/
+
 # Support for Project snippet scope
 .vscode/*.code-snippets
 

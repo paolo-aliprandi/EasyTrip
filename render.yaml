@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: easytrip
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm run start:guest
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: GRAPHHOPPER_KEY
+        sync: false

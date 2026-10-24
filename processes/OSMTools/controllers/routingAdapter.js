@@ -1,7 +1,8 @@
 'use strict';
 
-const { fetch, strToPoint, pointObjCompleteNames, pointArrayToObj, parseBoolean } = require("../../../common/functions");
+const { strToPoint, pointObjCompleteNames, pointArrayToObj, parseBoolean } = require("../../../common/functions");
 const { PROFILES } = require("../../../common/dataStructures");
+const providerRequest = require('../../../common/graphhopper');
 
 const geolib = require('geolib');
 
@@ -9,6 +10,15 @@ let MSG = {
     badRequest: "Bad Request", //Error code: 400
     serverError: "Server error", //Error code: 500
     notFound: "Data not found", //Error code: 404
+}
+
+function providerFailure(res, error) {
+    console.error('Routing provider failed:', error.name);
+    res.status(error.status || 502).json({
+        error: error.status === 429
+            ? 'GraphHopper request limit reached. Wait before trying again or check your account limits.'
+            : 'Routing provider is unavailable.'
+    });
 }
 
 module.exports.geocode = async (req, res) => {
@@ -33,19 +43,13 @@ module.exports.geocode = async (req, res) => {
         dist: Number.MAX_SAFE_INTEGER
     };
     let tmpPoint,closestTo,currentDist;
-    if (address != undefined
-            && (limit == undefined || !isNaN(limit))
+    if (typeof address === "string" && address.trim().length > 0 && address.length <= 300
+            && (limit == undefined || Number.isInteger(Number(limit)) && Number(limit) >= 1 && Number(limit) <= 10)
             && (closestToStr == undefined || (tmpPoint = strToPoint(closestToStr)) != null && tmpPoint.length == 2 && (closestTo = pointArrayToObj(tmpPoint)) != null)
             && (onlyPlacesStr == undefined || closestTo != undefined && (onlyPlaces = parseBoolean(onlyPlacesStr)) != null)) {
-        fetch("https://graphhopper.com/api/1/geocode"
-        + "?key=" + process.env.GRAPHHOPPER_KEY
-        + "&q=" + address
-        + (limit != undefined ? "&limit=" + limit : ""), {
-            method: 'GET',
-            headers: {
-            'Accept': 'application/json'
-            }
-        }).then(response => response.json()).then(response => {
+        const query = new URLSearchParams({ q: address.trim() });
+        if (limit != undefined) query.set('limit', limit);
+        return providerRequest('geocode', query).then(response => {
             if (Array.isArray(response.hits) && response.hits.length > 0) {
                 if (closestTo != undefined) {
                     for (const result of response.hits) {
@@ -72,10 +76,7 @@ module.exports.geocode = async (req, res) => {
             }
         })
         .catch(err => {
-            //console.error(err);
-            res.status(400).json({
-                error: MSG.badRequest
-            });
+            providerFailure(res, err);
         });
     } else {
         res.status(400).json({
@@ -102,9 +103,14 @@ module.exports.route = async (req, res) => {
      && (profile == undefined || PROFILES[profile] != undefined)
      && (shortAnswer == undefined || shortAnswer === 'true' || shortAnswer === 'false')) {
         points = Array(strPoints.length);
-        while (right && i < strPoints.length && typeof strPoints[i] == "string") {
+        while (right && i < strPoints.length) {
+            if (typeof strPoints[i] !== "string") {
+                right = false;
+                break;
+            }
             points[i] = strToPoint(strPoints[i]);
-            right = points[i] != null;
+            right = points[i] != null && points[i].length === 2
+                && Math.abs(points[i][0]) <= 90 && Math.abs(points[i][1]) <= 180;
             i++;
         }
     } else {
@@ -112,21 +118,15 @@ module.exports.route = async (req, res) => {
     }
 
     if (right) {
-        fetch("https://graphhopper.com/api/1/route"
-        + "?key=" + process.env.GRAPHHOPPER_KEY
-        + strPoints.reduce((p,c) => p += "&point=" + c,"")
-        + (profile != undefined ? "&profile=" + profile : "")
-        + (shortAnswer === 'true' ? "&instructions=false&calc_points=false" : "&points_encoded=false"), {
-            method: 'GET',
-            headers: {
-            'Accept': 'application/json'
-            }
-        }).then(response => response.json()).then(response => res.status(200).json(response))
+        const query = new URLSearchParams({ profile: profile || 'car', points_encoded: 'false' });
+        strPoints.forEach(point => query.append('point', point));
+        if (shortAnswer === 'true') {
+            query.set('instructions', 'false');
+            query.set('calc_points', 'false');
+        }
+        return providerRequest('route', query).then(response => res.status(200).json(response))
         .catch(err => {
-            //console.error(err);
-            res.status(400).json({
-                error: MSG.badRequest
-            });
+            providerFailure(res, err);
         });
     } else {
         res.status(400).json({

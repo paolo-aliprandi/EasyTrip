@@ -3,12 +3,19 @@
 const { pointToStr,pointArrayToObj,cleanWrtStruct,arrayToStr,reversePointArray, pointObjCompleteNames,parseBoolean } = require("../../../common/functions");
 const { OSM_TOOLS_URL,INTERESTS,PROFILES } = require("../../../common/dataStructures");
 
-const request = require('request-promise');
+const request = require('../../../common/http');
 const geolib = require('geolib');
 
 let MSG = {
     badRequest: "Bad Request", //Error code: 400
     serverError: "Server error", //Error code: 500
+}
+
+function providerLimited(res) {
+    res.setHeader('Retry-After', '60');
+    return res.status(429).json({
+        error: 'Routing request limit reached. Wait at least a minute before trying again; check provider and application budgets if it persists.'
+    });
 }
 
 module.exports.stops = async (req, res) => {
@@ -21,6 +28,7 @@ module.exports.stops = async (req, res) => {
     params["poisDescriptions"] = req.query.poisDescriptions;
 
     let stops = await getStops(params.start,params.end,params.interests,params.strLimit,params.minDistanceStr,params.maxDetourStr,params.profile,params.poisDescriptions);
+    if (stops?.providerLimited) return providerLimited(res);
 
     if (stops != null) {
         res.status(200).json({
@@ -42,14 +50,19 @@ module.exports.routeGET = async (req, res) => {
 
     let params = getCommonQueryParams(req.query);
 
-    let stops = await getStops(params.start,params.end,params.interests,params.strLimit,params.minDistanceStr,params.maxDetourStr,params.profile,"false");
+    let stops = await getStops(params.start,params.end,params.interests,params.strLimit,params.minDistanceStr,params.maxDetourStr,params.profile,req.query.poisDescriptions ?? "false");
+    if (stops?.providerLimited) return providerLimited(res);
 
     let route = await getRoute(stops,params.profile);
+    if (route.providerLimited) return providerLimited(res);
 
     if (route.paths != null) {
         res.status(200).json({
             //user: req.loggedUser,
-            route: route
+            route: route,
+            stops: stops,
+            warnings: stops.warnings || [],
+            suggestionsUnavailable: stops.suggestionsUnavailable === true
         });
     } else {
         res.status(400).json({
@@ -68,6 +81,7 @@ module.exports.routePOST = async (req, res) => {
     let stops = req.body.stops;
 
     let route = await getRoute(stops,profile);
+    if (route.providerLimited) return providerLimited(res);
 
 	if (route.paths != null) {
         res.status(200).json({
@@ -123,13 +137,14 @@ async function getStops(start,end,interests,strLimit = "3",minDistanceStr = "200
         //Retrieve start and end coordinates and informations
         if (right) {
             try {
-                stops.start = (await request(OSM_TOOLS_URL + "/v1/routing/geocode?limit=1&address=" + start)
+                stops.start = (await request(OSM_TOOLS_URL + "/v1/routing/geocode?limit=1&address=" + encodeURIComponent(start))
                                 .then(response => JSON.parse(response))).hits[0];
-                stops.end = (await request(OSM_TOOLS_URL + "/v1/routing/geocode?limit=1&address=" + end)
+                stops.end = (await request(OSM_TOOLS_URL + "/v1/routing/geocode?limit=1&address=" + encodeURIComponent(end))
                             .then(response => JSON.parse(response))).hits[0];
                 right = stops.start != undefined && stops.end != undefined ? true : false;
             } catch (error) {
-                //console.error(error);
+                console.error("Place lookup failed:", error.name);
+                if (error.statusCode === 429) return { providerLimited: true };
                 right = false;
             }
         }
@@ -144,14 +159,34 @@ async function getStops(start,end,interests,strLimit = "3",minDistanceStr = "200
                 //Retrieve route between start and end
                 path = (await request(OSM_TOOLS_URL + "/v1/routing/route?point=" + pointToStr(stops.start) + "&point=" + pointToStr(stops.end) + "&profile=" + profile)
                                 .then(response => JSON.parse(response))).paths[0];
+                if (!path || !Array.isArray(path.points?.coordinates) || path.points.coordinates.length < 2) {
+                    throw new Error("Routing provider returned no usable route");
+                }
+                const distances = [0];
+                for (let index = 1; index < path.points.coordinates.length; index++) {
+                    distances.push(distances[index - 1] + geolib.getDistance(
+                        pointArrayToObj(reversePointArray(path.points.coordinates[index - 1])),
+                        pointArrayToObj(reversePointArray(path.points.coordinates[index]))
+                    ));
+                }
+                const routeLength = distances[distances.length - 1];
+                const pointAtDistance = distance => {
+                    let index = distances.findIndex(value => value >= distance);
+                    if (index < 0) index = distances.length - 1;
+                    if (index > 0 && distance - distances[index - 1] < distances[index] - distance) index--;
+                    index = Math.max(1, Math.min(path.points.coordinates.length - 2, index));
+                    return reversePointArray(path.points.coordinates[index]);
+                };
+                limit = Math.min(limit, path.points.coordinates.length - 2);
+                if (!routeLength) limit = 0;
                 
                 //Find at most limit intermediary points at least minDistance apart
                 right = false;
                 while (limit >= 0 && !right) {
                     stops.intermediates = [];
-                    subPathLen = Math.round(path.points.coordinates.length/(limit+1));
-                    for (i = subPathLen; i < subPathLen*(limit+1); i += subPathLen) {
-                        stops.intermediates.push(reversePointArray(path.points.coordinates[i]));
+                    subPathLen = routeLength/(limit+1);
+                    for (i = 1; i <= limit; i++) {
+                        stops.intermediates.push(pointAtDistance(subPathLen*i));
                     }
                     if (limit > 0
                         && geolib.getDistance(pointArrayToObj(stops.intermediates[0]),
@@ -164,20 +199,14 @@ async function getStops(start,end,interests,strLimit = "3",minDistanceStr = "200
     
                 //For every point, search pois related with user interests and find the city with most of them
                 interestsStr = arrayToStr(interests,"&interest=",true);
-                poiTollerance = Math.round(subPathLen*0.2);
-                for (i = 0; i < stops.intermediates.length; i++) {
+                poiTollerance = subPathLen*0.2;
+                for (let routePointIndex = 0, i = 0; i < stops.intermediates.length; i++, routePointIndex++) {
                     //Find pois
                     j = 0;
                     do {
-                        stops.intermediates[i] = !poiDirections[j] ? stops.intermediates[i] : reversePointArray(path.points.coordinates[subPathLen*(i+1)+poiDirections[j]*poiTollerance]);
-                        try {
-                            pois = (await request(OSM_TOOLS_URL + "/v1/locations/poi?point=" + pointToStr(stops.intermediates[i]) + interestsStr + "&squareSide=" + maxDetour)
-                                .then(response => JSON.parse(response))
-                                .catch(error => new Promise(resolve => resolve({elements: []})))
-                                ).elements;
-                        } catch (err) {
-                            pois = [];
-                        }
+                        stops.intermediates[i] = pointAtDistance(subPathLen*(routePointIndex+1)+poiDirections[j]*poiTollerance);
+                        pois = (await request(OSM_TOOLS_URL + "/v1/locations/poi?point=" + pointToStr(stops.intermediates[i]) + interestsStr + "&squareSide=" + (maxDetour*2))
+                            .then(response => JSON.parse(response))).elements;
                         right = pois.length > 0;
                     } while (!right && ++j < poiDirections.length);
                     if (pois.length > 0) {
@@ -247,13 +276,30 @@ async function getStops(start,end,interests,strLimit = "3",minDistanceStr = "200
                 }
                 //Convert city name to a point
                 for (i = 0; i < stops.intermediates.length; i++) {
-                    stops.intermediates[i].details = (await request(OSM_TOOLS_URL + "/v1/routing/geocode?limit=5&onlyPlaces=true&address=" + stops.intermediates[i].details + "&closestTo=" + stops.intermediates[i].referPoint)
+                    stops.intermediates[i].details = (await request(OSM_TOOLS_URL + "/v1/routing/geocode?limit=5&onlyPlaces=true&address=" + encodeURIComponent(stops.intermediates[i].details) + "&closestTo=" + stops.intermediates[i].referPoint)
                     .then(response => JSON.parse(response))).hits[0];
                     delete stops.intermediates[i].referPoint;
                 }
+                const seenStops = new Set();
+                stops.intermediates = stops.intermediates.filter(stop => {
+                    if (!stop.details?.point) throw new Error("A suggested town could not be resolved");
+                    const identity = pointToStr(stop.details);
+                    if (seenStops.has(identity)) return false;
+                    seenStops.add(identity);
+                    return true;
+                });
             } catch (error) {
-                //console.log(error);
-                stops = null;
+                console.error("Stop search failed:", error.name, error.statusCode || "");
+                if (path?.points?.coordinates?.length >= 2) {
+                    stops.intermediates = [];
+                    stops.suggestionsUnavailable = true;
+                    stops.warnings = [
+                        "Suggested stops could not be loaded. Showing the direct route without suggested stops. You can add your own stops or try again later."
+                    ];
+                } else {
+                    if (error.statusCode === 429) return { providerLimited: true };
+                    stops = null;
+                }
             }
         }
     } else {
@@ -283,6 +329,7 @@ async function getRoute(stops,profile = "car") {
         }
     };
     let right = true;
+    let limited = false;
     let points,tmpIntermediates,i,tmpPath,lastInterval = 0;
     
     //Check parameters
@@ -326,18 +373,22 @@ async function getRoute(stops,profile = "car") {
                 path.descend += tmpPath.descend;
                 path.snapped_waypoints.coordinates.push(tmpPath.points.coordinates[tmpPath.points.coordinates.length-1]);
             } catch (error) {
-                //console.log(error);
+                console.error("Routing provider request failed:", error.name);
+                limited = error.statusCode === 429;
                 path = null;
             }
             i++;
         }
-        path.snapped_waypoints.coordinates.unshift(path.points.coordinates[0]);
+        if (path != null) {
+            path.snapped_waypoints.coordinates.unshift(path.points.coordinates[0]);
+        }
     } else {
         path = null;
     }
 
     return {
-        paths: path != null ? [path] : null
+        paths: path != null ? [path] : null,
+        providerLimited: limited
     };
 }
 

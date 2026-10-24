@@ -5,7 +5,7 @@ let MSG = {
     serverError: "Server error", //Errorr code: 500
 }
 
-const request = require('request-promise');
+const request = require('../../../common/http');
 
 const fetch = (...args) =>
 	import('node-fetch').then(({default: fetch}) => fetch(...args));

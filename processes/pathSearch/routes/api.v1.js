@@ -7,7 +7,7 @@ const pathRouter = require('./apiV1/path');
 
 // middleware that tracks request
 apiV1.use(function timeLog(req, res, next) {
-  console.log(`Requested ${req.originalUrl} From ${req.headers['x-forwarded-for']} Time: ${Date.now()}`);
+  console.log(`Requested ${req.method} ${req.path} Time: ${Date.now()}`);
 	next();
 });
 

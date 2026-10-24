@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#174b3d" />
+    <meta
+      name="description"
+      content="Plan driving, cycling, and walking routes with EasyTrip. Discover towns and points of interest, customize your stops, and open your itinerary in Google Maps."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="EasyTrip" />
+    <meta property="og:title" content="EasyTrip | Plan routes with interesting stops" />
+    <meta property="og:description" content="Discover places along your driving, cycling, or walking route. Customize your itinerary with no account needed." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="EasyTrip | Plan routes with interesting stops" />
+    <meta name="twitter:description" content="Discover places along your route and customize your stops. No account needed." />
+    <title>EasyTrip | Plan routes with interesting stops</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="/vendor/leaflet/leaflet.js"></script>
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <noscript>
+      <p class="service-notice">EasyTrip needs JavaScript to calculate routes and show the interactive map. Enable JavaScript to use the planner.</p>
+    </noscript>
+    <a class="skip-link" href="#planner">Skip to trip planner</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="EasyTrip home">
+        <svg viewBox="0 0 36 36" aria-hidden="true">
+          <rect width="36" height="36" rx="12" fill="currentColor" />
+          <path d="m24 11-4 11-9 3 4-11Z" fill="#f7f4eb" />
+          <circle cx="18" cy="18" r="2" fill="#174b3d" />
+        </svg>
+        EasyTrip<span class="brand-dot">.</span>
+      </a>
+      <nav aria-label="Main navigation">
+        <a class="nav-active" href="#planner">Plan a trip</a
+        ><a href="#how-it-works">How it works</a>
+      </nav>
+      <span class="guest-label"
+        ><span class="status-dot"></span>No account needed</span
+      >
+    </header>
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">FOR THE PLACES IN BETWEEN</p>
+          <h1>The journey is<br />part of the <em>trip.</em></h1>
+        </div>
+        <div class="hero-aside">
+          <p>
+            A good route. A few worthwhile stops.<br />A little more room for
+            discovery.
+          </p>
+          <button type="button" class="text-button" id="explore-example">
+            Explore a sample walk <span aria-hidden="true">&nearr;</span>
+          </button>
+        </div>
+      </section>
+      <div id="service-status" class="service-notice" role="status">
+        Checking live routing availability...
+      </div>
+      <section class="workspace" aria-label="Trip planning workspace">
+        <aside class="planner-card" id="planner">
+          <div class="section-heading">
+            <span class="step-badge">01</span>
+            <h2>Where are we going?</h2>
+          </div>
+          <p class="muted intro">Start with a journey. Make it your own.</p>
+          <div class="trip-presets" role="group" aria-label="Journey ideas">
+            <span>Need a starting point?</span>
+            <button type="button" class="preset-button" data-preset="walk">A walk in Verona</button>
+            <button type="button" class="preset-button" data-preset="drive">Trento to Verona</button>
+          </div>
+          <form id="trip-form">
+            <div class="journey-inputs">
+              <label for="start">Starting from</label
+              ><input
+                id="start"
+                name="start"
+                placeholder="City or full address"
+                autocomplete="off"
+                maxlength="300"
+                required
+              />
+              <button
+                id="swap-places"
+                class="swap-button"
+                type="button"
+                aria-label="Swap start and destination"
+              >
+                &darr;&uarr;
+              </button>
+              <label for="end">Going to</label
+              ><input
+                id="end"
+                name="end"
+                placeholder="Somewhere worth going"
+                autocomplete="off"
+                maxlength="300"
+                required
+              />
+            </div>
+            <fieldset class="travel-mode">
+              <legend>How are you traveling?</legend>
+              <label
+                ><input type="radio" name="profile" value="car" checked /><span
+                  >Drive</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="profile" value="bike" /><span
+                  >Cycle</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="profile" value="foot" /><span
+                  >Walk</span
+                ></label
+              >
+            </fieldset>
+            <fieldset class="interests">
+              <legend>What catches your eye?</legend>
+              <label
+                ><input
+                  type="checkbox"
+                  name="interest"
+                  value="tourism"
+                  checked
+                /><span>Sights &amp; culture</span></label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="interest"
+                  value="sustenance"
+                /><span>Food &amp; coffee</span></label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="interest"
+                  value="entertainment"
+                /><span>Entertainment</span></label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="interest"
+                  value="accomodation"
+                /><span>Places to stay</span></label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="interest"
+                  value="education"
+                /><span>Learning</span></label
+              >
+            </fieldset>
+            <div class="form-row">
+              <label for="limit">Suggested stops</label
+              ><select name="limit" id="limit">
+                <option value="0">Just the route</option>
+                <option value="1">Up to 1 stop</option>
+                <option value="2" selected>Up to 2 stops</option>
+                <option value="3">Up to 3 stops</option>
+                <option value="5">Up to 5 stops</option>
+                <option value="8">Up to 8 stops</option>
+              </select>
+            </div>
+            <details class="options">
+              <summary>Fine-tune your journey</summary>
+              <label for="min-distance">Minimum stop spacing (km)</label
+              ><input
+                id="min-distance"
+                name="minDistance"
+                type="number"
+                min="1"
+                max="1000"
+                step="1"
+                value="20"
+                required
+              />
+              <label for="max-detour">Stop search distance (km)</label
+              ><input
+                id="max-detour"
+                name="maxDetour"
+                type="number"
+                min="0"
+                max="500"
+                aria-describedby="search-distance-note"
+                step="0.5"
+                value="10"
+                required
+              />
+              <p class="field-note" id="search-distance-note">
+                Distance from a route search point to each edge of the search
+                square, not a guarantee of extra driving time.
+                Search distance must be at most half the stop spacing.
+              </p>
+              <label class="checkbox-row"
+                ><input
+                  id="weather"
+                  name="weather"
+                  type="checkbox"
+                  disabled
+                />Include weather
+                <span id="weather-status">(checking availability)</span></label
+              >
+            </details>
+            <button class="primary-button" id="plan-button" type="submit">
+              <span id="plan-label">Find my route</span
+              ><span aria-hidden="true">&rarr;</span>
+            </button>
+            <button
+              class="text-button cancel-button"
+              id="cancel-request"
+              type="button"
+              hidden
+            >
+              Cancel request
+            </button>
+            <p class="privacy-note">No sign-up. Just a starting point.</p>
+          </form>
+        </aside>
+        <div class="journey-panel">
+          <div class="map-card">
+            <div class="map-toolbar">
+              <div>
+                <span class="eyebrow">YOUR NEXT ADVENTURE</span>
+                <h2 id="map-heading">A world of possibilities</h2>
+              </div>
+              <span class="map-pill" id="route-kind">Ready when you are</span>
+            </div>
+            <div
+              id="map"
+              role="region"
+              aria-label="Interactive journey map"
+            ></div>
+            <p id="map-notice" class="map-notice" hidden>
+              Map tiles are unavailable. Route details and navigation links
+              still work.
+            </p>
+            <div class="map-footer">
+              <span class="status-dot"></span
+              ><span id="map-caption"
+                >Choose your journey to draw a real route.</span
+              ><button id="fit-route" class="text-button" type="button" hidden>
+                Fit route
+              </button>
+            </div>
+          </div>
+          <div
+            id="request-status"
+            class="request-status"
+            role="status"
+            aria-live="polite"
+          ></div>
+          <div
+            id="request-error"
+            class="error-notice"
+            role="alert"
+            hidden
+          ></div>
+          <div
+            id="route-warnings"
+            class="warning-notice"
+            role="status"
+            hidden
+          ></div>
+          <section id="empty-state" class="empty-state">
+            <div class="empty-icon" aria-hidden="true">&#9672;</div>
+            <div>
+              <h2>A route with room for discovery</h2>
+              <p>
+                Pick your places and interests. We will suggest towns along the
+                way, then you can adjust the stops.
+              </p>
+            </div>
+          </section>
+          <section
+            id="results"
+            class="results"
+            aria-label="Your itinerary"
+            hidden
+          >
+            <div class="results-heading">
+              <div>
+                <p class="eyebrow">MADE FOR THE WAY YOU TRAVEL</p>
+                <h2>Your journey, at a glance</h2>
+              </div>
+              <button type="button" class="outline-button" id="share-trip">Share itinerary</button>
+              <a
+                id="navigation-link"
+                class="outline-button"
+                target="_blank"
+                rel="noopener noreferrer"
+                >Open navigation &nearr;</a
+              >
+            </div>
+            <div class="route-stats">
+              <div>
+                <span id="route-distance"></span><small>Total distance</small>
+              </div>
+              <div>
+                <span id="route-time"></span
+                ><small id="time-label">Travel time only</small>
+              </div>
+              <div>
+                <span id="route-stop-count"></span
+                ><small>Stops along the way</small>
+              </div>
+            </div>
+            <p class="field-note" id="result-note">
+              Travel time excludes visits, breaks, and live traffic. Check place
+              details before setting out.
+            </p>
+            <ol id="itinerary" class="itinerary"></ol>
+            <form id="add-stop-form" class="add-stop-form">
+              <label for="add-stop">Add somewhere you want to visit</label>
+              <div>
+                <input
+                  id="add-stop"
+                  placeholder="Search a town or address"
+                  maxlength="300"
+                  autocomplete="off"
+                  required
+                /><button type="submit" class="outline-button" id="search-stop">
+                  Search
+                </button>
+              </div>
+            </form>
+            <div
+              id="place-options"
+              class="place-options"
+              aria-label="Matching places"
+            ></div>
+          </section>
+          <details class="privacy-details" id="privacy">
+            <summary>Your journey, your choice</summary>
+            <p>
+              Guest trips are not saved to an account. Places you search for are sent
+              to GraphHopper to calculate routes and find stops; repeated searches
+              may be cached in server memory for five minutes. Map tiles come from
+              OpenStreetMap, and optional place details and photos come from
+              OpenStreetMap, Wikidata, and Wikimedia. These services receive your
+              requests or network information. No analytics trackers are enabled.
+              Share an itinerary only when you are comfortable sharing its locations.
+            </p>
+          </details>
+        </div>
+      </section>
+      <section class="how-it-works" id="how-it-works">
+        <div>
+          <p class="eyebrow">LESS PLANNING. MORE GOING.</p>
+          <h2>A few good stops change everything.</h2>
+        </div>
+        <div>
+          <span>01 / FIND YOUR WAY</span>
+          <p>
+            Choose where you are starting, where you are going, and how you
+            travel.
+          </p>
+        </div>
+        <div>
+          <span>02 / MAKE IT YOURS</span>
+          <p>
+            Explore suggested towns or add your own stops. Check the updated
+            route before you go.
+          </p>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <a class="brand" href="/">EasyTrip<span class="brand-dot">.</span></a>
+      <p>Take the route. Enjoy the in-between.</p>
+      <span>Map data &copy; OpenStreetMap contributors</span>
+    </footer>
+  </body>
+</html>
